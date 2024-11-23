@@ -22,9 +22,9 @@ type Result struct {
 }
 
 type RateLimiterClient interface {
-	Check(ctx context.Context, identifier string) (Result, error)
-	Allow(ctx context.Context, identifier string) (Result, error)
-	AllowN(ctx context.Context, identifier string, n int64) (Result, error)
+	Check(ctx context.Context, identifier string, options ...RateLimitOption) (Result, error)
+	Allow(ctx context.Context, identifier string, options ...RateLimitOption) (Result, error)
+	AllowN(ctx context.Context, identifier string, n int64, options ...RateLimitOption) (Result, error)
 }
 
 const PlaceholderPrefix = "rueidislimiter"
@@ -77,24 +77,31 @@ func (l *rateLimiter) Limit() int {
 	return l.limit
 }
 
-func (l *rateLimiter) Check(ctx context.Context, identifier string) (Result, error) {
-	return l.AllowN(ctx, identifier, 0)
+func (l *rateLimiter) Check(ctx context.Context, identifier string, options ...RateLimitOption) (Result, error) {
+	return l.AllowN(ctx, identifier, 0, options...)
 }
 
-func (l *rateLimiter) Allow(ctx context.Context, identifier string) (Result, error) {
-	return l.AllowN(ctx, identifier, 1)
+func (l *rateLimiter) Allow(ctx context.Context, identifier string, options ...RateLimitOption) (Result, error) {
+	return l.AllowN(ctx, identifier, 1, options...)
 }
 
-func (l *rateLimiter) AllowN(ctx context.Context, identifier string, n int64) (Result, error) {
+func (l *rateLimiter) AllowN(ctx context.Context, identifier string, n int64, options ...RateLimitOption) (Result, error) {
 	if n < 0 {
 		return Result{}, ErrInvalidTokens
+	}
+	rl := RateLimit{
+		limit:  l.limit,
+		window: l.window,
+	}
+	for _, option := range options {
+		option(&rl)
 	}
 
 	now := time.Now().UTC()
 	keys := []string{l.getKey(identifier)}
 	args := []string{
 		strconv.FormatInt(n, 10),
-		strconv.FormatInt(now.Add(l.window).UnixMilli(), 10),
+		strconv.FormatInt(now.Add(rl.window).UnixMilli(), 10),
 		strconv.FormatInt(now.UnixMilli(), 10),
 	}
 
@@ -109,14 +116,14 @@ func (l *rateLimiter) AllowN(ctx context.Context, identifier string, n int64) (R
 	}
 
 	current := data[0]
-	remaining := int64(l.limit) - current
+	remaining := int64(rl.limit) - current
 	if remaining < 0 {
 		remaining = 0
 	}
 
-	allowed := current <= int64(l.limit)
+	allowed := current <= int64(rl.limit)
 	if n == 0 {
-		allowed = current < int64(l.limit)
+		allowed = current < int64(rl.limit)
 	}
 
 	return Result{
